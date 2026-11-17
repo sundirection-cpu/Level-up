@@ -1,6 +1,6 @@
 'use strict';
 /* ==========================================================
-   LEVEL UP — прокачка себя как персонажа RPG.
+   KinLevel — прокачка рода: каждый в семье — герой RPG.
    Данные хранятся локально (localStorage) по профилям семьи.
    Тексты интерфейса — в i18n.js (ru / en / pt).
    ========================================================== */
@@ -64,12 +64,13 @@ const fmtDate = k=>k?k.split('-').reverse().join('.'):'';
 function hashStr(s){ let h=2166136261; for(const c of s){ h^=c.charCodeAt(0); h=Math.imul(h,16777619);} return h>>>0; }
 
 // ---------- Хранилище ----------
-const KEY = 'levelup.v1';
+const KEY = 'kinlevel.v1';
+const OLD_KEY = 'levelup.v1';   // данные прошлых версий — переносятся автоматически
 let DB = load();
 function detectLang(){ const l=(navigator.language||'en').toLowerCase(); return l.startsWith('pt')?'pt':l.startsWith('ru')?'ru':'en'; }
 function load(){
   let d=null;
-  try{ d = JSON.parse(localStorage.getItem(KEY)); }catch(e){}
+  try{ d = JSON.parse(localStorage.getItem(KEY) || localStorage.getItem(OLD_KEY)); }catch(e){}
   if(!d || !d.profiles) d = {profiles:[], current:null, settings:{sound:true}};
   d.settings = d.settings || {sound:true};
   // У тех, кто уже играл до перевода, язык — русский.
@@ -173,7 +174,7 @@ function grant(p, {xp=0, gold=0, attr=null, reason='', crit=false, noMult=false,
   if(at){ if(fx) floatText(at,`+${fx} XP`, isCrit?'crit':''); if(fg) setTimeout(()=>floatText(at,`+${fg}`,'gold',14),180); }
   sfx(isCrit?'crit':'ok');
   const after = charLevel(p).level;
-  if(after>before && after>(p.maxLevel||1)){ p.maxLevel=after; addLog(p,t('lvlLog',{l:after,t:titleOf(after)}),'y'); queueLevelUp(after); }
+  if(after>before && after>(p.maxLevel||1)){ p.maxLevel=after; addLog(p,t('lvlLog',{l:after,t:titleOf(after)}),'y'); queueNewLevel(after); }
   if(attr){ const aAfter=attrLevel(p,attr).level; const mx=p.attrMax[attr]||1;
     if(aAfter>aBefore && aAfter>mx){ p.attrMax[attr]=aAfter; addLog(p,t('attrLog',{a:aName(attr),n:aAfter}),'y');
       setTimeout(()=>toast(`<span class="br">[</span>${esc(t('attrToast',{a:aName(attr),n:aAfter}))}<span class="br">]</span>`,'gold'),400); sfx('attr'); }
@@ -283,18 +284,18 @@ function floatText(at,txt,cls='',dy=0){
   el.style.left=(at.x-20)+'px'; el.style.top=(at.y-20+dy)+'px'; document.body.appendChild(el); setTimeout(()=>el.remove(),1100);
 }
 let lvlQueue=[];
-function queueLevelUp(lv){ lvlQueue.push(lv); if(lvlQueue.length===1) setTimeout(showLevelUp,600); }
-function showLevelUp(){
+function queueNewLevel(lv){ lvlQueue.push(lv); if(lvlQueue.length===1) setTimeout(showNewLevel,600); }
+function showNewLevel(){
   const lv=lvlQueue[0]; if(!lv) return;
   sfx('lvl');
   const f=document.createElement('div'); f.className='flash'; document.body.appendChild(f); setTimeout(()=>f.remove(),500);
-  const el=document.createElement('div'); el.className='lvlup';
+  const el=document.createElement('div'); el.className='newlvl';
   el.innerHTML=`<div class="frame card">${icon('star',5)}<div class="big">${t('newLevel')}</div><div class="num">${lv}</div>
     <p>${t('titleLbl')} <b style="color:var(--k4)">${titleOf(lv)}</b></p><p class="muted small">${t('lvlFlavor')}</p><p class="blinktxt">${t('tapContinue')}</p></div>`;
   for(let i=0;i<36;i++){ const s=document.createElement('i'); s.className='spark'; const a=Math.random()*Math.PI*2, r=120+Math.random()*220;
     s.style.left='50%'; s.style.top='45%'; s.style.setProperty('--dx',Math.cos(a)*r+'px'); s.style.setProperty('--dy',Math.sin(a)*r+'px');
     s.style.background=['#ffcd75','#a7f070','#73eff7','#ef7d57','#f4f4f4'][i%5]; s.style.animationDelay=(Math.random()*.3)+'s'; el.appendChild(s); }
-  el.onclick=()=>{ el.remove(); lvlQueue.shift(); if(lvlQueue.length) setTimeout(showLevelUp,200); };
+  el.onclick=()=>{ el.remove(); lvlQueue.shift(); if(lvlQueue.length) setTimeout(showNewLevel,200); };
   document.body.appendChild(el);
 }
 function bar(cur,max,color,label,cls=''){
@@ -363,12 +364,12 @@ function renderTitle(){
   $('nav.bottom').style.display='none';
   $('#app').innerHTML=`<div class="titlescreen">
     <div class="opts" style="justify-content:center;margin-bottom:18px">${LANGS.map(l=>`<button class="opt ${DB.settings.lang===l?'on':''}" data-a="lang" data-v="${l}">${I18N[l]._name}</button>`).join('')}</div>
-    <div style="display:flex;justify-content:center;gap:8px;align-items:flex-end">${avatarImg({skin:0,hair:0,outfit:0},5)}${avatarImg({skin:1,hair:2,outfit:3,hairStyle:1},4)}${avatarImg({skin:2,hair:5,outfit:1,hairStyle:3},3)}</div>
-    <div class="logo">LEVEL UP<small>${t('tagline')}</small></div>
+    <div class="crest">${icon('crest',5)}</div>
+    <div class="logo">KIN<span>LEVEL</span><small>${t('tagline')}</small></div>
+    <div style="display:flex;justify-content:center;gap:8px;align-items:flex-end;margin-top:22px">${avatarImg({skin:0,hair:0,outfit:0},5)}${avatarImg({skin:1,hair:2,outfit:3,hairStyle:1},4)}${avatarImg({skin:2,hair:5,outfit:1,hairStyle:3},3)}</div>
     ${DB.profiles.length?`<div class="frame panel herolist"><div class="panel-title">${icon('hero',2)} ${t('pickHero')}</div>${DB.profiles.map(heroRow).join('')}</div>`:''}
     <button class="btn green" data-a="newhero" style="margin-top:18px">${DB.profiles.length?t('newHero'):t('startGame')}</button>
     ${DB.profiles.length?'':`<p class="blinktxt" style="margin-top:28px">${t('createChar')}</p>`}
-    <p class="muted tiny" style="margin-top:30px">${t('credit')}</p>
   </div>`;
 }
 function heroRow(p){
@@ -647,7 +648,7 @@ function menu(title, items){
 }
 
 function exportBackup(){
-  const name=`levelup-backup-${today()}.json`, text=JSON.stringify(DB,null,1);
+  const name=`kinlevel-backup-${today()}.json`, text=JSON.stringify(DB,null,1);
   if(window.AndroidBridge){ // внутри APK: сохраняем через Android в «Загрузки»
     const path=window.AndroidBridge.save(name,text);
     toast(path?`[${esc(t('backupSaved',{p:path}))}]`:`[${t('saveErr',{e:'?'})}]`, path?'':'bad', 4000);

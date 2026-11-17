@@ -1,4 +1,4 @@
-package app.levelup.family;
+package app.kinlevel.family;
 
 import android.app.Activity;
 import android.content.ContentValues;
@@ -18,7 +18,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 
-// Обёртка: показывает веб-приложение Level Up из assets.
+// Обёртка: показывает веб-приложение KinLevel из assets.
 // Внешние ссылки открываются в браузере, резервная копия сохраняется в «Загрузки».
 public class MainActivity extends Activity {
     private static final int PICK_FILE = 1;
