@@ -13,6 +13,7 @@ KinLevel (раньше назывался Level Up) — пиксельное RPG
 - Чистый HTML/CSS/JS без сборки: `index.html`, `style.css`, `sprites.js` (вся графика в коде), `i18n.js`, `app.js`, `sw.js` (офлайн; после изменений поднимать `VERSION`).
 - Данные — в localStorage (`kinlevel.v1`; старый ключ `levelup.v1` переносится автоматически).
 - Запуск: `./start.sh` → http://localhost:8765.
+- Звук и фоновая музыка — свои, на Web Audio (`sfx()`, `musicStep()` в app.js). Шаг квеста = 100 золота (`STEP_GOLD`). Подработка «Чем тебе помочь?» — `p.jobs`, панель во вкладке «Квесты» (с 2026-11-24, версия 2.1).
 
 ## APK для Android
 - Собирается **только на компьютере владельца**: `./android/build-apk.sh` → `KinLevel.apk` в корне проекта. Инструменты и ключ подписи лежат в `~/.local/share/android-build` (`kinlevel.keystore` — не терять).
