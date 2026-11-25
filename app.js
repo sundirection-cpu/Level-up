@@ -17,6 +17,8 @@ const TITLE_LEVELS = [1,3,5,8,12,16,20,25,30,40,50];
 const CLEAN_MILESTONES = [1,3,7,14,30,60,100,180,365];
 const DAILY_ATTRS = ['str','end','end','int','int','cha','cha','wil','wil','cre','cre','wea','wea','spi','spi','wil','str','end'];
 const PRESET_HABITS = [{attr:'str',diff:1},{attr:'int',diff:2},{attr:'end',diff:1},{attr:'end',diff:2},{attr:'cha',diff:2},{attr:'wea',diff:1},{attr:'spi',diff:1}];
+const STEP_GOLD = 100;   // монет за каждый шаг квеста
+const JOB_PRESETS = [10,20,50,100];   // быстрые суммы для подработки
 const PRESET_REWARD_COSTS = [50,60,80,250,400,1500];
 const LANGS = ['ru','en','pt'];
 
@@ -73,6 +75,7 @@ function load(){
   try{ d = JSON.parse(localStorage.getItem(KEY) || localStorage.getItem(OLD_KEY)); }catch(e){}
   if(!d || !d.profiles) d = {profiles:[], current:null, settings:{sound:true}};
   d.settings = d.settings || {sound:true};
+  if(d.settings.music===undefined) d.settings.music = true;
   // У тех, кто уже играл до перевода, язык — русский.
   if(!LANGS.includes(d.settings.lang)) d.settings.lang = d.profiles.length ? 'ru' : detectLang();
   return d;
@@ -95,7 +98,7 @@ function newProfile(name, av, presets){
   const p = {
     id:uid(), name, avatar:av, created:today(), lastDay:today(),
     xp:0, gold:0, hp:100, maxLevel:1, attrs:Object.fromEntries(ATTRS.map(a=>[a.id,0])), attrMax:{},
-    habits:[], bad:[], quests:[], rewards:[], purchases:[], checkins:{}, ach:{}, log:[],
+    habits:[], bad:[], quests:[], jobs:[], rewards:[], purchases:[], checkins:{}, ach:{}, log:[],
     stats:{habitDone:0,questsDone:0,sDone:0,crits:0,dailyDone:0,perfectDays:0,bestSpheresDay:0},
     spheresDay:{date:today(),set:[]}, perfectDay:null, daily:null,
   };
@@ -151,7 +154,7 @@ function critChance(p){ return 0.05 + effects(p).reduce((s,e)=>s+(e.crit||0),0);
 function addLog(p,msg,cls=''){ p.log.unshift({t:Date.now(),msg,cls}); if(p.log.length>300) p.log.length=300; }
 
 // ---------- Награда / откат ----------
-function grant(p, {xp=0, gold=0, attr=null, reason='', crit=false, noMult=false, at=null}){
+function grant(p, {xp=0, gold=0, attr=null, reason='', crit=false, noMult=false, at=null, snd='ok'}){
   let isCrit=false;
   if(crit && Math.random()<critChance(p)){ isCrit=true; p.stats.crits++; }
   let fx = noMult? xp : Math.round(xp*xpMult(p));
@@ -172,7 +175,7 @@ function grant(p, {xp=0, gold=0, attr=null, reason='', crit=false, noMult=false,
     toast(`${isCrit?`<b style="color:var(--k3)">${t('critBig')}</b> `:''}<span class="br">[</span>${esc(reason)}${reason?' — ':''}${parts.join(', ')}<span class="br">]</span>`, isCrit?'gold':'');
   }
   if(at){ if(fx) floatText(at,`+${fx} XP`, isCrit?'crit':''); if(fg) setTimeout(()=>floatText(at,`+${fg}`,'gold',14),180); }
-  sfx(isCrit?'crit':'ok');
+  sfx(isCrit&&snd==='ok'?'crit':snd);
   const after = charLevel(p).level;
   if(after>before && after>(p.maxLevel||1)){ p.maxLevel=after; addLog(p,t('lvlLog',{l:after,t:titleOf(after)}),'y'); queueNewLevel(after); }
   if(attr){ const aAfter=attrLevel(p,attr).level; const mx=p.attrMax[attr]||1;
@@ -248,30 +251,117 @@ function dailyQuest(p){
 }
 const dailyText = d=> d.i!==undefined ? L().daily[d.i] : d.t;
 
-// ---------- Звук (8-bit) ----------
-let AC=null;
-function tone(f,d,t0=0,type='square',v=0.06){
-  if(!DB.settings.sound) return;
+// ---------- Звук: мягкие «колокольчики» + тихая фоновая музыка ----------
+let AC=null, SFX=null;
+function ac(){
   try{
     AC = AC || new (window.AudioContext||window.webkitAudioContext)();
-    const o=AC.createOscillator(), g=AC.createGain(); o.type=type; o.frequency.value=f;
-    const s=AC.currentTime+t0; g.gain.setValueAtTime(v,s); g.gain.exponentialRampToValueAtTime(0.0001,s+d);
-    o.connect(g); g.connect(AC.destination); o.start(s); o.stop(s+d+0.02);
-  }catch(e){}
+    if(AC.state==='suspended') AC.resume();
+    if(!SFX){ // шина эффектов: лёгкое эхо, чтобы звук был «объёмным»
+      SFX=AC.createGain(); SFX.gain.value=.9;
+      const dl=AC.createDelay(1), fb=AC.createGain(), wet=AC.createGain(), lp=AC.createBiquadFilter();
+      dl.delayTime.value=.19; fb.gain.value=.28; wet.gain.value=.22; lp.type='lowpass'; lp.frequency.value=3200;
+      SFX.connect(AC.destination); SFX.connect(dl); dl.connect(lp); lp.connect(fb); fb.connect(dl); lp.connect(wet); wet.connect(AC.destination);
+    }
+    return AC;
+  }catch(e){ return null; }
+}
+const NOTE={C:0,'C#':1,Db:1,D:2,Eb:3,E:4,F:5,'F#':6,G:7,Ab:8,A:9,Bb:10,B:11};
+const hz=n=>{ const m=n.match(/^([A-G][b#]?)(\d)$/); return 440*Math.pow(2,(NOTE[m[1]]+(+m[2]+1)*12-69)/12); };
+// один голос: bell — колокольчик, pluck — щипок, pad — мягкий аккорд, lead — тёплый «чиптюн»
+function voice(out, kind, f, t0, dur, vol){
+  const a=AC, o=a.createOscillator(), g=a.createGain();
+  o.type = kind==='pluck'||kind==='pad'?'triangle': kind==='lead'?'square':'sine';
+  o.frequency.value=f;
+  let atk=.004, rel=dur;
+  if(kind==='pad'){ atk=.12; rel=dur+.4; } if(kind==='bell') rel=dur+.8; if(kind==='lead'){ atk=.02; rel=dur+.1; vol*=.35; }
+  g.gain.setValueAtTime(.0001,t0); g.gain.linearRampToValueAtTime(vol,t0+atk); g.gain.exponentialRampToValueAtTime(.0001,t0+rel);
+  let node=o;
+  if(kind==='lead'){ const lp=a.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=1800; o.connect(lp); node=lp; }
+  node.connect(g); g.connect(out); o.start(t0); o.stop(t0+rel+.05);
+  if(kind==='bell'){ // звонкий обертон
+    const o2=a.createOscillator(), g2=a.createGain(); o2.type='sine'; o2.frequency.value=f*3.01;
+    g2.gain.setValueAtTime(vol*.25,t0); g2.gain.exponentialRampToValueAtTime(.0001,t0+.35);
+    o2.connect(g2); g2.connect(out); o2.start(t0); o2.stop(t0+.4);
+  }
+  if(kind==='pad'){ const o3=a.createOscillator(); o3.type='triangle'; o3.frequency.value=f*1.004; o3.connect(g); o3.start(t0); o3.stop(t0+rel+.05); }
+}
+// мелодия эффекта: [нота, время в долях, длительность, тип, громкость]
+function play(seq, step=.075){
+  if(!DB.settings.sound) return; const a=ac(); if(!a) return; const t0=a.currentTime+.02;
+  seq.forEach(([n,at,d,k='bell',v=.16])=>(Array.isArray(n)?n:[n]).forEach(x=>voice(SFX,k,hz(x),t0+at*step,d*step,v)));
 }
 function sfx(k){
   const S={
-    ok:()=>{tone(660,.08);tone(990,.12,.07)},
-    crit:()=>{[660,880,1320,1760].forEach((f,i)=>tone(f,.1,i*.06))},
-    undo:()=>{tone(440,.08);tone(330,.1,.07)},
-    hurt:()=>{tone(180,.15,0,'sawtooth',.07);tone(120,.2,.1,'sawtooth',.07)},
-    coin:()=>{tone(988,.06);tone(1319,.25,.06)},
-    ach:()=>{[523,659,784,1047,784,1047].forEach((f,i)=>tone(f,.12,i*.09))},
-    attr:()=>{[392,523,659].forEach((f,i)=>tone(f,.1,i*.07,'triangle',.08))},
-    lvl:()=>{[523,523,523,698,880,784,1047].forEach((f,i)=>tone(f,.16,i*.11));tone(131,.9,0,'triangle',.08)},
-    click:()=>tone(520,.03,0,'square',.03),
+    // задача выполнена: светлое «динь-динь-дилинь» на мягком аккорде
+    ok:()=>play([[['C4','E4','G4'],0,8,'pad',.05],['E5',0,3],['G5',1,3],['C6',2,6,'bell',.18],['E6',3,7,'bell',.1]]),
+    // шаг к цели: монетки сыплются + аккорд
+    step:()=>play([[['F4','A4','C5'],0,8,'pad',.05],['C6',0,2,'bell',.12],['E6',1,2,'bell',.12],['G6',2,2,'bell',.12],['C7',3,6,'bell',.1],['A5',1,5,'pluck',.1],['C6',3,6,'pluck',.1]]),
+    crit:()=>play([[['C4','E4','G4','C5'],0,10,'pad',.06],['C5',0,2],['E5',1,2],['G5',2,2],['C6',3,2],['E6',4,2],['G6',5,8,'bell',.14],['C7',6,8,'bell',.08]],.065),
+    // квест / подработка закрыты: маленькая победная мелодия F → G → C
+    quest:()=>play([[['F3','A3','C4'],0,4,'pad',.06],[['G3','B3','D4'],4,4,'pad',.06],[['C4','E4','G4','C5'],8,12,'pad',.07],
+      ['C5',0,1,'lead',.2],['F5',1,1,'lead',.2],['A5',2,2,'lead',.2],['B5',4,1,'lead',.2],['D6',5,1,'lead',.2],['G5',6,2,'lead',.2],
+      ['C6',8,10,'bell',.18],['E6',9,9,'bell',.12],['G6',10,8,'bell',.1],['C7',11,10,'bell',.08]],.09),
+    undo:()=>play([['E5',0,2,'pluck',.12],['C5',2,4,'pluck',.12]]),
+    hurt:()=>play([['E3',0,3,'lead',.25],['Bb2',2,5,'lead',.25]]),
+    coin:()=>play([['B5',0,1,'bell',.14],['E6',1,6,'bell',.14],['G6',2,6,'bell',.07]],.06),
+    ach:()=>play([[['C4','E4','G4'],0,12,'pad',.06],['C5',0,2],['E5',2,2],['G5',4,2],['C6',6,3],['G5',9,2],['C6',11,10,'bell',.18],['E6',12,9,'bell',.1]],.07),
+    attr:()=>play([['G5',0,2,'pluck',.12],['C6',1,2,'pluck',.12],['E6',2,5,'bell',.12]]),
+    lvl:()=>play([[['C4','E4','G4'],0,6,'pad',.07],[['F4','A4','C5'],6,6,'pad',.07],[['G4','B4','D5'],12,6,'pad',.07],[['C4','E4','G4','C5'],18,16,'pad',.08],
+      ['C5',0,2,'lead',.2],['E5',2,2,'lead',.2],['G5',4,2,'lead',.2],['A5',6,2,'lead',.2],['C6',8,2,'lead',.2],['A5',10,2,'lead',.2],['B5',12,2,'lead',.2],['D6',14,2,'lead',.2],['G5',16,2,'lead',.2],
+      ['C6',18,14,'bell',.2],['E6',19,13,'bell',.12],['G6',20,12,'bell',.1],['C7',21,12,'bell',.07]],.09),
+    click:()=>play([['G5',0,1,'pluck',.05]],.05),
   }; (S[k]||S.click)();
 }
+
+// Фоновая музыка: своя спокойная мелодия, до мажор, 88 ударов в минуту.
+// Аккорды C–G–Am–F; чётные проходы — колокольчики, нечётные — тёплый чиптюн.
+const MSTEP=60/88/2;
+const M_CH=['C','G','Am','F','C','G','F','G','Am','F','C','G','F','G','C','C'];
+const M_TONES={C:['C4','E4','G4'],G:['B3','D4','G4'],Am:['A3','C4','E4'],F:['A3','C4','F4']};
+const M_BASS={C:['C3','G2'],G:['G2','D3'],Am:['A2','E3'],F:['F2','C3']};
+const M_MEL=[
+  'E4 - G4 - C5 - G4 -','D4 - G4 - B4 - - -','C5 - B4 A4 E4 - A4 -','F4 - - - . . E4 F4',
+  'G4 - E4 - C4 - E4 G4','B4 - - D5 B4 - G4 -','A4 - C5 - F4 - A4 -','G4 - - - . . . .',
+  'A4 - C5 - E5 - D5 C5','C5 - A4 - F4 - - -','E4 - G4 - C5 - E5 -','D5 - - - B4 - G4 -',
+  'A4 - C5 - F5 - E5 D5','D5 - - B4 G4 - D5 -','C5 - - - G4 - E4 -','C4 - - - . . . .'].map(s=>s.split(' '));
+const M_ARP=[0,1,2,1,0,1,2,1];
+let MUS={out:null,timer:null,step:0,next:0};
+function musicStep(i,t0){
+  const bar=Math.floor(i/8)%16, e=i%8, pass=Math.floor(i/128), ch=M_CH[bar], tn=M_TONES[ch];
+  voice(MUS.out,'pluck',hz(tn[M_ARP[e]]),t0,MSTEP*.9,.05);
+  if(e===0) voice(MUS.out,'pad',hz(M_BASS[ch][0]),t0,MSTEP*3.5,.14);
+  if(e===4) voice(MUS.out,'pad',hz(M_BASS[ch][1]),t0,MSTEP*3.5,.1);
+  const tok=M_MEL[bar][e];
+  if(tok!=='-' && tok!=='.'){
+    let len=1; while(e+len<8 && M_MEL[bar][e+len]==='-') len++;
+    if(pass%2===0) voice(MUS.out,'bell',hz(tok)*2,t0,MSTEP*len,.07);
+    else voice(MUS.out,'lead',hz(tok),t0,MSTEP*len*.95,.2);
+  }
+}
+function musicTick(){
+  const a=AC; if(!a || !MUS.out || a.state!=='running') return;
+  if(MUS.next<a.currentTime) MUS.next=a.currentTime+.05;
+  while(MUS.next<a.currentTime+.3){ musicStep(MUS.step,MUS.next); MUS.next+=MSTEP; MUS.step++; }
+}
+function musicOn(){
+  if(!DB.settings.music || MUS.timer || document.hidden) return;
+  const a=ac(); if(!a) return;
+  if(!MUS.out){ MUS.out=a.createGain(); MUS.out.gain.value=0;
+    const dl=a.createDelay(1), fb=a.createGain(), wet=a.createGain(); dl.delayTime.value=MSTEP*1.5; fb.gain.value=.3; wet.gain.value=.25;
+    MUS.out.connect(a.destination); MUS.out.connect(dl); dl.connect(fb); fb.connect(dl); dl.connect(wet); wet.connect(a.destination); }
+  MUS.next=a.currentTime+.15;
+  MUS.out.gain.cancelScheduledValues(a.currentTime); MUS.out.gain.setValueAtTime(.0001,a.currentTime); MUS.out.gain.linearRampToValueAtTime(.35,a.currentTime+3);
+  MUS.timer=setInterval(musicTick,50); musicTick();
+}
+function musicOff(){
+  if(!MUS.timer) return; clearInterval(MUS.timer); MUS.timer=null;
+  if(AC && MUS.out){ MUS.out.gain.cancelScheduledValues(AC.currentTime); MUS.out.gain.setTargetAtTime(0,AC.currentTime,.3); }
+}
+// браузер разрешает звук только после первого касания
+const firstGesture=()=>{ ac(); musicOn(); removeEventListener('pointerdown',firstGesture); removeEventListener('keydown',firstGesture); };
+addEventListener('pointerdown',firstGesture); addEventListener('keydown',firstGesture);
+document.addEventListener('visibilitychange',()=>{ if(document.hidden){ musicOff(); AC&&AC.suspend&&AC.suspend(); } else { AC&&AC.resume&&AC.resume(); musicOn(); } });
 
 // ---------- UI-хелперы ----------
 function toast(html, cls='', life=2600){
@@ -346,7 +436,7 @@ function render(){
   document.documentElement.lang=DB.settings.lang;
   const p=P();
   if(!p){ renderTitle(); return; }
-  dayTick(p); dailyQuest(p); cleanMilestones(p); checkAchs(p); save();
+  p.jobs=p.jobs||[]; dayTick(p); dailyQuest(p); cleanMilestones(p); checkAchs(p); save();
   const cl=charLevel(p);
   $('#app').innerHTML = `
     <header class="topbar">
@@ -483,6 +573,7 @@ function viewQuests(p){
   list.sort((a,b)=> QTAB==='active' ? ((a.deadline||'9999')>(b.deadline||'9999')?1:-1) || ord.indexOf(a.rank)-ord.indexOf(b.rank) : (b.doneAt||'').localeCompare(a.doneAt||''));
   return `
   <div class="tabs2"><button class="${QTAB==='active'?'on':''}" data-a="qtab" data-v="active">${t('active',{n:p.quests.filter(q=>q.status==='active').length})}</button><button class="${QTAB!=='active'?'on':''}" data-a="qtab" data-v="done">${t('archive')}</button></div>
+  ${viewJobs(p)}
   <section class="frame panel">
     <div class="panel-title">${icon('sword',2)} ${t('questsTitle')} <span class="grow"></span>${QTAB==='active'?`<button class="btn small green" data-a="addquest">${t('addQuest')}</button>`:''}</div>
     ${list.map(q=>questRow(p,q)).join('') || `<div class="empty">${QTAB==='active'?t('noQuests'):t('noArchive')}</div>`}
@@ -503,6 +594,23 @@ function questRow(p,q){
       ${q.status==='active'?`<div style="margin-top:8px"><button class="btn small green" data-a="qdone" data-id="${q.id}">${t('finish')}</button></div>`:''}
     </div>
     <button class="more" data-a="questmenu" data-id="${q.id}">⋮</button></div>`;
+}
+
+// ----- Подработка: «Чем тебе помочь?» -----
+function viewJobs(p){
+  const act=QTAB==='active';
+  const list=p.jobs.filter(j=>act?j.status==='active':j.status==='done');
+  if(!act) list.sort((a,b)=>(b.doneAt||'').localeCompare(a.doneAt||''));
+  if(!act && !list.length) return '';
+  return `<section class="frame panel">
+    <div class="panel-title">${icon('gift',2)} ${act?t('jobsTitle'):t('jobsDone')} <span class="grow"></span>${act?`<button class="btn small gold" data-a="addjob">${t('addJob')}</button>`:''}</div>
+    ${act?`<div class="tiny muted" style="margin-bottom:8px">${t('jobsHint')}</div>`:''}
+    ${list.slice(0,40).map(j=>`<div class="item ${j.status==='done'?'done':''}">${icon('coin',3)}
+      <div class="body"><div class="t">${esc(j.task)}</div>
+        <div class="sub">${j.who?`<span>${esc(t('jobFor',{n:j.who}))}</span>`:''}<span>${icon('coin',2)} ${j.reward}</span>${j.doneAt?`<span>${fmtDate(j.doneAt)}</span>`:''}</div>
+        ${j.status==='active'?`<div style="margin-top:8px"><button class="btn small green" data-a="jobdone" data-id="${j.id}">${t('jobDoneBtn')}</button></div>`:''}</div>
+      <button class="more" data-a="jobmenu" data-id="${j.id}">⋮</button></div>`).join('') || `<div class="empty">${t('noJobs')}</div>`}
+  </section>`;
 }
 
 // ----- Ачивки -----
@@ -624,6 +732,31 @@ function rewardForm(r){
     });
 }
 
+function jobForm(j){
+  const isNew=!j; j=j||{task:'',who:'',reward:20};
+  const others=DB.profiles.filter(x=>x.id!==DB.current).map(x=>x.name);
+  modal(`<h2>${isNew?t('newJob'):t('editJob')}</h2>
+    <p class="small muted">${t('jobFormHint')}</p>
+    <label class="f">${t('jobWho')}</label><input class="inp" id="jw" maxlength="40" list="jwl" value="${esc(j.who)}" placeholder="${esc(t('jobWhoPh'))}">
+    <datalist id="jwl">${others.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>
+    <label class="f">${t('jobWhat')}</label><input class="inp" id="jt" maxlength="80" value="${esc(j.task)}" placeholder="${esc(t('jobWhatPh'))}">
+    <label class="f">${t('jobReward')}</label>${optGroup('jr',JOB_PRESETS.map(n=>({v:n,label:String(n),html:icon('coin',2)})),j.reward)}
+    <input class="inp mt" id="jr" type="number" min="1" max="100000" value="${j.reward}">
+    <div class="actions"><button class="btn gray" data-x="no">${t('cancel')}</button><button class="btn green" data-x="ok">${isNew?t('jobTake'):t('save')}</button></div>`, bg=>{
+      bindOpts(bg);
+      bg.querySelector('[data-group=jr]').addEventListener('change',()=>{ bg.querySelector('#jr').value=getOpt(bg,'jr'); });
+      bg.querySelector('#jr').addEventListener('input',e=>{ bg.querySelectorAll('[data-group=jr] .opt').forEach(b=>b.classList.toggle('on',b.dataset.v===e.target.value)); });
+      bg.querySelector('[data-x=no]').onclick=closeModal;
+      bg.querySelector('[data-x=ok]').onclick=()=>{
+        const p=P(); const task=bg.querySelector('#jt').value.trim(); if(!task){ bg.querySelector('#jt').focus(); return; }
+        const data={task, who:bg.querySelector('#jw').value.trim(), reward:Math.max(1,Math.min(100000,parseInt(bg.querySelector('#jr').value)||0))};
+        if(isNew){ p.jobs.unshift({id:uid(),...data,status:'active',created:today()}); addLog(p,t('jobLog',{t:task,g:data.reward}),'c'); sfx('attr'); }
+        else Object.assign(j,data);
+        QTAB='active'; save(); closeModal(); render();
+      };
+    });
+}
+
 function badForm(b){
   const isNew=!b;
   modal(`<h2>${isNew?t('newBad'):t('editBad')}</h2>
@@ -663,6 +796,7 @@ function settingsModal(){
     <label class="f">${t('language')}</label>${optGroup('lang',langOpts(),DB.settings.lang)}
     <div style="height:10px"></div>
     <button class="btn block ${DB.settings.sound?'green':'gray'}" data-x="sound">${t('sound',{v:DB.settings.sound?t('on'):t('off')})}</button>
+    <button class="btn block ${DB.settings.music?'green':'gray'}" data-x="music">${t('music',{v:DB.settings.music?t('on'):t('off')})}</button>
     <button class="btn block" data-x="edit">${t('editHero')}</button>
     <button class="btn block" data-x="profiles">${t('switchHero')}</button>
     <button class="btn block gray" data-x="export">${t('backup')}</button>
@@ -674,6 +808,7 @@ function settingsModal(){
       bg.querySelector('[data-group=lang]').addEventListener('change',()=>{ setLang(getOpt(bg,'lang')); settingsModal(); });
       const on=(x,f)=>bg.querySelector(`[data-x=${x}]`).onclick=f;
       on('sound',()=>{ DB.settings.sound=!DB.settings.sound; save(); settingsModal(); });
+      on('music',()=>{ DB.settings.music=!DB.settings.music; save(); DB.settings.music?musicOn():musicOff(); settingsModal(); });
       on('edit',()=>heroForm(true));
       on('profiles',()=>{ closeModal(); profilesModal(); });
       on('export',exportBackup);
@@ -735,13 +870,13 @@ const ACTIONS = {
   addquest:()=>questForm(),
   step:(el,e)=>{ const p=P(), q=p.quests.find(x=>x.id===el.dataset.id), s=q.steps[+el.dataset.i];
     if(s.done){ ungrant(p,s.g); s.done=false; s.g=null; sfx('undo'); }
-    else { s.done=true; s.g=grant(p,{xp:5,gold:1,attr:q.attr,reason:t('stepReason'),at:atFromEvent(e)}); }
+    else { s.done=true; s.g=grant(p,{xp:5,gold:STEP_GOLD,attr:q.attr,reason:t('stepReason'),at:atFromEvent(e),snd:'step'}); }
     save(); render(); },
   qdone:(el,e)=>{ const p=P(), q=p.quests.find(x=>x.id===el.dataset.id); const at=atFromEvent(e);
     const left=(q.steps||[]).filter(s=>!s.done).length;
     confirmBox(t('finishAsk',{t:esc(q.title)})+(left?t('stepsLeft',{n:left}):''),t('finish'),()=>{
       const r=RANKS[q.rank]; q.status='done'; q.doneAt=today();
-      q.g=grant(p,{xp:r.xp,gold:r.gold,attr:q.attr,reason:t('questDone',{t:q.title}),crit:true,at});
+      q.g=grant(p,{xp:r.xp,gold:r.gold,attr:q.attr,reason:t('questDone',{t:q.title}),crit:true,at,snd:'quest'});
       p.stats.questsDone++; if(q.rank==='S') p.stats.sDone++; heal(p,10);
       checkAchs(p); save(); render(); },false); },
   questmenu:(el)=>{ const p=P(), q=p.quests.find(x=>x.id===el.dataset.id);
@@ -754,6 +889,19 @@ const ACTIONS = {
     } else items.push({label:t('reopen'),fn:()=>{ q.status='active'; q.doneAt=null; save(); render(); }});
     items.push({label:t('del'),cls:'red',fn:()=>confirmBox(t('delQuestAsk'),t('del'),()=>{ p.quests=p.quests.filter(x=>x!==q); save(); render(); })});
     menu(q.title,items); },
+
+  addjob:()=>jobForm(),
+  jobdone:(el,e)=>{ const p=P(), j=p.jobs.find(x=>x.id===el.dataset.id); const at=atFromEvent(e);
+    confirmBox(t('jobDoneAsk',{t:esc(j.task),g:j.reward}),t('jobDoneYes'),()=>{
+      j.status='done'; j.doneAt=today();
+      j.g=grant(p,{xp:10,gold:j.reward,attr:'cha',reason:t('jobReason',{t:j.task}),noMult:true,at,snd:'quest'});
+      p.stats.jobsDone=(p.stats.jobsDone||0)+1; heal(p,5);
+      checkAchs(p); save(); render(); },false); },
+  jobmenu:(el)=>{ const p=P(), j=p.jobs.find(x=>x.id===el.dataset.id); const items=[];
+    if(j.status==='active') items.push({label:t('edit'),fn:()=>jobForm(j)});
+    else items.push({label:t('reopenUndo'),fn:()=>{ ungrant(p,j.g); j.g=null; j.status='active'; j.doneAt=null; p.stats.jobsDone=Math.max(0,(p.stats.jobsDone||0)-1); sfx('undo'); save(); render(); }});
+    items.push({label:t('del'),cls:'red',fn:()=>confirmBox(t('delJobAsk'),t('del'),()=>{ p.jobs=p.jobs.filter(x=>x!==j); save(); render(); })});
+    menu(j.task,items); },
 
   dailydone:(el,e)=>{ const p=P(), d=p.daily, r=dailyReward(p);
     d.done=true; d.grant=grant(p,{xp:r.xp,gold:r.gold,attr:d.a,reason:t('dailyReason'),crit:true,at:atFromEvent(e)}); p.stats.dailyDone++;
@@ -808,4 +956,6 @@ function buildNav(){
 
 buildNav();
 render();
+// просим браузер не стирать данные (важно для iPhone)
+try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
 if('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(()=>{});
