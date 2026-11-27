@@ -17,6 +17,9 @@ const TITLE_LEVELS = [1,3,5,8,12,16,20,25,30,40,50];
 const CLEAN_MILESTONES = [1,3,7,14,30,60,100,180,365];
 const DAILY_ATTRS = ['str','end','end','int','int','cha','cha','wil','wil','cre','cre','wea','wea','spi','spi','wil','str','end'];
 const PRESET_HABITS = [{attr:'str',diff:1},{attr:'int',diff:2},{attr:'end',diff:1},{attr:'end',diff:2},{attr:'cha',diff:2},{attr:'wea',diff:1},{attr:'spi',diff:1}];
+// Набор «Расписание школьника»: привычки по дням недели (0 = вс). Названия — в i18n.js (schoolPack).
+const SCHOOL_PACK = [{attr:'int',diff:2,days:[1,2,3,4,5]},{attr:'int',diff:3,days:[1,2,3,4,5]},{attr:'cre',diff:2,days:[1,3,5]},
+  {attr:'int',diff:3,days:[2,4]},{attr:'cha',diff:1,days:[1,2,3,4,5,6]},{attr:'int',diff:2,days:[1,2,3,4,5]},{attr:'wil',diff:3,days:[6]}];
 const STEP_GOLD = 100;   // монет за каждый шаг квеста
 const JOB_PRESETS = [10,20,50,100];   // быстрые суммы для подработки
 const PRESET_REWARD_COSTS = [50,60,80,250,400,1500];
@@ -540,7 +543,7 @@ function viewHabits(p){
   const doneN=todays.filter(h=>h.done[tk]).length;
   return `
   <section class="frame panel">
-    <div class="panel-title">${icon('check',2)} ${t('habitsToday')} <span class="grow"></span><button class="btn small green" data-a="addhabit">${t('add')}</button></div>
+    <div class="panel-title">${icon('check',2)} ${t('habitsToday')} <span class="grow"></span><button class="btn small" data-a="schoolpack">${t('packBtn')}</button><button class="btn small green" data-a="addhabit">${t('add')}</button></div>
     ${todays.length?`${bar(doneN,todays.length,'var(--k6)',`${doneN} / ${todays.length}`,'big')}`:''}
     ${todays.map(h=>habitRow(p,h,tk)).join('') || `<div class="empty">${t('noHabits')}</div>`}
     ${other.length?`<div class="panel-title mt" style="color:var(--muted)">${t('notToday')}</div>${other.map(h=>habitRow(p,h,tk,true)).join('')}`:''}
@@ -859,6 +862,12 @@ const ACTIONS = {
     menu(h.title,[{label:t('edit'),fn:()=>habitForm(h)},{label:t('bestStreak',{n:Math.max(h.best||0,habitStreak(h))}),fn:()=>{}},
       {label:t('del'),cls:'red',fn:()=>confirmBox(t('delHabitAsk',{t:esc(h.title)}),t('del'),()=>{ p.habits=p.habits.filter(x=>x!==h); save(); render(); })}]); },
   addhabit:()=>habitForm(),
+  schoolpack:()=>{ const p=P(); const have=new Set(p.habits.map(h=>h.title.trim().toLowerCase()));
+    const add=SCHOOL_PACK.map((h,i)=>({...h,title:L().schoolPack[i]})).filter(h=>!have.has(h.title.toLowerCase()));
+    if(!add.length){ toast(`[${t('packHave')}]`); return; }
+    confirmBox(t('packAsk',{n:add.length,list:add.map(h=>'• '+esc(h.title)).join('<br>')}),t('packOk'),()=>{
+      add.forEach(h=>{ p.habits.push({id:uid(),title:h.title,attr:h.attr,diff:h.diff,days:h.days.slice(),done:{},created:today()}); addLog(p,t('habitLog',{t:h.title}),'c'); });
+      save(); render(); toast(`[${t('packDone',{n:add.length})}]`); },false); },
 
   addbad:()=>badForm(),
   slip:(el,e)=>{ const p=P(), b=p.bad.find(x=>x.id===el.dataset.id); const at=atFromEvent(e);
